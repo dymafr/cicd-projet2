@@ -1,0 +1,108 @@
+include:
+  - local: 'deploy_common.yml'
+
+stages:
+  - test
+  - build
+  - e2e
+  - deploy
+
+variables:
+  FRONTEND_IMAGE: $CI_REGISTRY_IMAGE/frontend
+  BACKEND_IMAGE: $CI_REGISTRY_IMAGE/node-api
+  SERVER_STAGING: "54.37.11.162"
+  SERVER_PRODUCTION: "78.138.45.88"
+
+.container_registry: &container_registry
+  image: docker
+  services:
+    - docker:dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY --username container-registry-rw --password-stdin
+
+test_frontend:
+  image: node:lts-bullseye
+  stage: test
+  cache:
+    key:
+      files:
+        - "frontend/package-lock.json"
+    paths:
+      - frontend/node_modules/
+      - frontend/.npm/
+  script:
+    - cd frontend
+    - npm ci --cache .npm --prefer-offline
+    - npm run lint
+    - npm audit
+  # On lancerait les tests unitaires ici
+
+test_backend:
+  image: node:lts-bullseye
+  stage: test
+  cache:
+    key:
+      files:
+        - "node-api/package-lock.json"
+    paths:
+      - node-api/node_modules/
+      - node-api/.npm/
+  script:
+    - cd node-api
+    - npm ci --cache .npm --prefer-offline
+    - npm run lint
+    - npm audit
+    - npm run test:ci
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+
+build_frontend:
+  stage: build
+  <<: *container_registry
+  script:
+    - cd frontend
+    - docker pull $FRONTEND_IMAGE:latest || true
+    - docker build --cache-from $FRONTEND_IMAGE:latest -t $FRONTEND_IMAGE:$CI_COMMIT_SHORT_SHA -t $FRONTEND_IMAGE:latest .
+    - docker push $FRONTEND_IMAGE --all-tags
+  
+build_backend:
+  stage: build
+  <<: *container_registry
+  script:
+    - cd node-api
+    - docker pull $BACKEND_IMAGE:latest || true
+    - docker build --cache-from $BACKEND_IMAGE:latest -t $BACKEND_IMAGE:$CI_COMMIT_SHORT_SHA -t $BACKEND_IMAGE:latest .
+    - docker push $BACKEND_IMAGE --all-tags
+
+e2e:
+  stage: e2e
+  <<: *container_registry
+  script:
+    - docker compose up --exit-code-from cypress --abort-on-container-exit
+  after_script:
+    - docker compose down -v --remove-orphans
+
+
+deploy_staging:
+  stage: deploy
+  extends: .deploy_common
+  variables:
+    SERVER_ADDRESS: $SERVER_STAGING
+    SSH_KEY: "$SSH_KEY_OVH_STAGING"
+  environment:
+    name: staging
+    url: http://$SERVER_STAGING
+  only:
+    - main
+
+deploy_production:
+  stage: deploy
+  extends: .deploy_common
+  when: manual
+  variables:
+    SERVER_ADDRESS: $SERVER_PRODUCTION
+    SSH_KEY: "$SSH_KEY_OVH_PROD"
+  environment:
+    name: production
+    url: http://$SERVER_PRODUCTION
+  only:
+    - main
