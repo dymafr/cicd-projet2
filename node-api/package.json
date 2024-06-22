@@ -37,5 +37,11 @@
       "text-summary",
       "cobertura"
     ]
+  },
+  {
+  "config": {
+    "mongodbMemoryServer": {
+      "version": "7.0.11"
+    }
   }
 }
